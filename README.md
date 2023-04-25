@@ -11,8 +11,8 @@ Any WikiJS groups that you make with the same name as an in-game corporation per
 
 The provider does not know all of the permissions and titles in the corp. It therefore will remove groups you manually add to a user which do not correspond to any in-game permission or title. To work around this, add part or all of the name of the group to the keyword blacklist in the authentication provider settings. Any group containing one of those keywords will never be automatically removed from a user.
 
-### Corp Membership
-The provider will check if a user is a member of any number of specified corporations when they log in. If they are, it can automatically assign any number of roles to the user. Use a tool such as [EveWho](https://evewho.com) to grab the IDs of corporations. Then specify the full name of any groups you want to automatically assign corp members.
+### Corp/Alliance Membership
+The provider will check if a user is a member of any number of specified corporations or alliances when they log in. If they are, it can automatically assign any number of roles to the user. Use a tool such as [EveWho](https://evewho.com) to grab the IDs of corporations and alliances. Then specify the full name of any groups you want to automatically assign corp/alliance members.
 
 ## Updating
 

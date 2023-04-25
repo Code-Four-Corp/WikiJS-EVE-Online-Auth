@@ -8,6 +8,15 @@ const _ = require('lodash')
 const OAuth2Strategy = require('passport-oauth2').Strategy
 var jwt = require('jsonwebtoken');
 
+const markupRegex = /(<[^>]*>)*(?<name>[^<]+)(<[^>]*>)*/i;
+const getStringWithoutFormatting = (formattedString) => {
+  const match = markupRegex.exec(formattedString);
+
+  if(!match) return null
+
+  return match.groups.name
+}
+
 const getRoles = async ({ profile, accessToken }) => {
   const response = await fetch(`https://esi.evetech.net/latest/characters/${profile.id}/roles/`, {
     headers: new Headers({
@@ -21,7 +30,10 @@ const getRoles = async ({ profile, accessToken }) => {
   let roles = data?.roles;
 
   if (roles && _.isArray(roles)) {
-    roles = roles.map(f => f.toLowerCase().trim().replace(/_/g, " "));
+    roles = roles
+    .map(f => f.toLowerCase().trim().replace(/_/g, " "))
+    .map(getStringWithoutFormatting)
+    .filter(f => f);
   }
 
   return roles || [];
@@ -38,13 +50,16 @@ const getTitles = async ({ profile, accessToken }) => {
   let data = await response?.json();
 
   if (data && _.isArray(data)) {
-    data = data.map(f => f.name.toLowerCase().trim().replace(/_/g, " "));
+    data = data
+      .map(f => f.name.toLowerCase().trim().replace(/_/g, " "))
+      .map(getStringWithoutFormatting)
+      .filter(f => f);
   }
 
   return data || [];
 }
 
-const getProfile = async ({ profile }) => {
+const getCharacterInfo = async ({ profile }) => {
   const response = await fetch(`https://esi.evetech.net/latest/characters/${profile.id}/`);
   return await response?.json();
 }
@@ -86,7 +101,6 @@ const removeGroup = async ({ user, groupId, allGroups, keywordBlacklist }) => {
   WIKI.logger.info(`Removed group: ${group.name} (${groupId})`);
 }
 
-
 module.exports = {
   init(passport, conf) {
     var client = new OAuth2Strategy({
@@ -99,86 +113,94 @@ module.exports = {
       state: true,
       scope: conf.scope
     },
-      async (req, accessToken, refreshToken, profile, cb) => {
-        try {
-          const user = await WIKI.models.users.processProfile({
-            providerKey: req.params.strategy,
-            profile
-          })
+    async (req, accessToken, refreshToken, profile, cb) => {
+      try {
+        const user = await WIKI.models.users.processProfile({
+          providerKey: req.params.strategy,
+          profile
+        })
 
-          const corpIds = conf.corpIds;
+        const allianceIds = conf.allianceIds;
+        const corpIds = conf.corpIds;
+        const corpIdsArray = corpIds?.split(",")?.map(f => f.trim());
+        const allianceIdsArray = allianceIds?.split(",")?.map(f => f.trim());
 
-          if (corpIds?.length > 0) {
-            // Get the character profile.
-            const profileData = await getProfile({ profile });
+        if (allianceIdsArray?.length || corpIdsArray?.length) {
+          const keywordBlacklist = conf.keywordBlacklist?.split(",")?.map(f => f.toLowerCase().trim()) || [];
+          const memberGroupNames = conf.corpMemberGroupNames?.split(",")?.map(f => f.toLowerCase().trim()) || [];
 
-            const corpIdsArray = corpIds.split(",").map(f => f.trim());
-            const keywordBlacklist = conf.keywordBlacklist?.split(",")?.map(f => f.toLowerCase().trim()) || [];
-            const memberGroupNames = conf.corpMemberGroupNames?.split(",")?.map(f => f.toLowerCase().trim()) || [];
+          // Get the character and corporation info.
+          const characterData = await getCharacterInfo({ profile });
 
-            const isMember = corpIdsArray.includes(`${profileData?.corporation_id}`);
-            WIKI.logger.info(isMember ? 'Is corp member' : `Is not corp member (${profileData?.corporation_id})`);
+          const isCorpMember = corpIdsArray.includes(`${characterData?.corporation_id}`);
+          const isAllianceMember = allianceIdsArray.includes(`${characterData?.alliance_id}`);
 
-            if (isMember) {
-              // Get the characters's corp roles and titles.
-              const [roles, titles, currentGroupsRaw] = await Promise.all([
-                getRoles({ profile, accessToken }),
-                getTitles({ profile, accessToken }),
-                user.$relatedQuery('groups').select('groups.id'),
-              ]);
+          WIKI.logger.info(isCorpMember ? 'Is corp member' : `Is not corp member (${characterData?.corporation_id})`);
+          WIKI.logger.info(isAllianceMember ? 'Is alliance member' : `Is not alliance member (${characterData?.alliance_id})`);
 
-              const rolesAndTitles = [
-                ...roles,
-                ...titles,
-              ];
+          if (isCorpMember || isAllianceMember) {
+            // Get the characters's corp roles and titles.
+            const [roles, titles, currentGroupsRaw] = await Promise.all([
+              getRoles({ profile, accessToken }),
+              getTitles({ profile, accessToken }),
+              user.$relatedQuery('groups').select('groups.id'),
+            ]);
 
-              WIKI.logger.info(`Roles and titles: ${JSON.stringify(rolesAndTitles)}`);
+            const rolesAndTitles = [
+              ...roles,
+              ...titles,
+            ];
 
-              const allGroups = Object.values(WIKI.auth.groups);
-              const memberGroups = allGroups.filter(f => memberGroupNames.includes(f.name.trim().toLowerCase()));
+            WIKI.logger.info(`Roles and titles: ${JSON.stringify(rolesAndTitles)}`);
 
-              const currentGroups = currentGroupsRaw.map(g => g.id);
+            const allGroups = Object.values(WIKI.auth.groups);
+            const memberGroups = allGroups.filter(f => memberGroupNames.includes(f.name.trim().toLowerCase()));
 
-              let expectedGroups = allGroups
-                .filter(g => rolesAndTitles.includes(g.name.toLowerCase().trim()))
-                .map(g => g.id);
+            const currentGroups = currentGroupsRaw.map(g => g.id);
 
-              // Anyone who is in any of the member corps should
-              // get the "Member" group automatically.
-              expectedGroups = [
-                ...expectedGroups,
-                ...memberGroups.map(f => f.id),
-              ];
+            let expectedGroups = allGroups
+              .filter(g => rolesAndTitles.includes(g.name.toLowerCase().trim()))
+              .map(g => g.id);
 
-              const groupsToAdd = _.difference(expectedGroups, currentGroups);
-              const groupsToRemove = _.difference(currentGroups, expectedGroups);
+            // Anyone who is in any of the member corps should
+            // get the "Member" group automatically.
+            expectedGroups = [
+              ...expectedGroups,
+              ...memberGroups.map(f => f.id),
+            ];
 
-              await Promise.all([
-                ...groupsToAdd.map(f => addGroup({ user, allGroups, groupId: f })),
-                ...groupsToRemove.map(f => removeGroup({ user, allGroups, groupId: f, keywordBlacklist })),
-              ]);
-            }
+            const groupsToAdd = _.difference(expectedGroups, currentGroups);
+            const groupsToRemove = _.difference(currentGroups, expectedGroups);
+
+            await Promise.all([
+              ...groupsToAdd.map(f => addGroup({ user, allGroups, groupId: f })),
+              ...groupsToRemove.map(f => removeGroup({ user, allGroups, groupId: f, keywordBlacklist })),
+            ]);
           }
-
-          cb(null, user);
-        } catch (err) {
-          cb(err, null);
         }
-      });
+
+        cb(null, user);
+      } catch (err) {
+        cb(err, null);
+      }
+    });
 
     OAuth2Strategy.prototype.userProfile = function (accessToken, done) {
       try {
         const payload = jwt.decode(accessToken);
-        const sub = payload.sub;
-        const chardetail = sub.split(":");
-        const charid = chardetail[2];
 
-        WIKI.logger.info(`Authenticating '${payload.name}' (${charid})`);
+        const sub = payload.sub;
+        const subTokens = sub.split(":");
+        const characterId = subTokens[2];
+
+        const characterName = payload.name;
+
+        WIKI.logger.info(`Authenticating '${payload.name}' (${characterId})`);
 
         done(null, {
-          id: charid,
-          displayName: payload.name,
-          email: charid + '@auth.eveonline.com',
+          id: characterId,
+          displayName: characterName,
+          email: characterId + '@auth.eveonline.com',
         });
       } catch (err) {
         WIKI.logger.warn('Eve Online - Failed to parse user profile.');
