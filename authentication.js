@@ -120,64 +120,72 @@ module.exports = {
           profile
         })
 
+        const useAutoRoles = conf.useAutoRoles;
+
         const allianceIds = conf.allianceIds;
         const corpIds = conf.corpIds;
         const corpIdsArray = corpIds?.split(",")?.map(f => f.trim());
         const allianceIdsArray = allianceIds?.split(",")?.map(f => f.trim());
 
-        if (allianceIdsArray?.length || corpIdsArray?.length) {
-          const keywordBlacklist = conf.keywordBlacklist?.split(",")?.map(f => f.toLowerCase().trim()) || [];
-          const memberGroupNames = conf.corpMemberGroupNames?.split(",")?.map(f => f.toLowerCase().trim()) || [];
+        if (!allianceIdsArray?.length && !corpIdsArray?.length)
+          return cb(null, user);
 
-          // Get the character and corporation info.
-          const characterData = await getCharacterInfo({ profile });
+        const keywordBlacklist = conf.keywordBlacklist?.split(",")?.map(f => f.toLowerCase().trim()) || [];
+        const memberGroupNames = conf.corpMemberGroupNames?.split(",")?.map(f => f.toLowerCase().trim()) || [];
 
-          const isCorpMember = corpIdsArray.includes(`${characterData?.corporation_id}`);
-          const isAllianceMember = allianceIdsArray.includes(`${characterData?.alliance_id}`);
+        // Get the character and corporation info.
+        const characterData = await getCharacterInfo({ profile });
 
-          WIKI.logger.info(isCorpMember ? 'Is corp member' : `Is not corp member (${characterData?.corporation_id})`);
-          WIKI.logger.info(isAllianceMember ? 'Is alliance member' : `Is not alliance member (${characterData?.alliance_id})`);
+        const isCorpMember = corpIdsArray.includes(`${characterData?.corporation_id}`);
+        const isAllianceMember = allianceIdsArray.includes(`${characterData?.alliance_id}`);
 
-          if (isCorpMember || isAllianceMember) {
-            // Get the characters's corp roles and titles.
-            const [roles, titles, currentGroupsRaw] = await Promise.all([
-              getRoles({ profile, accessToken }),
-              getTitles({ profile, accessToken }),
-              user.$relatedQuery('groups').select('groups.id'),
-            ]);
+        WIKI.logger.info(isCorpMember ? 'Is corp member' : `Is not corp member (${characterData?.corporation_id})`);
+        WIKI.logger.info(isAllianceMember ? 'Is alliance member' : `Is not alliance member (${characterData?.alliance_id})`);
 
-            const rolesAndTitles = [
-              ...roles,
-              ...titles,
-            ];
+        const allGroups = Object.values(WIKI.auth.groups);
+        const memberGroups = allGroups.filter(f => memberGroupNames.includes(f.name.trim().toLowerCase()));
 
-            WIKI.logger.info(`Roles and titles: ${JSON.stringify(rolesAndTitles)}`);
-
-            const allGroups = Object.values(WIKI.auth.groups);
-            const memberGroups = allGroups.filter(f => memberGroupNames.includes(f.name.trim().toLowerCase()));
-
-            const currentGroups = currentGroupsRaw.map(g => g.id);
-
-            let expectedGroups = allGroups
-              .filter(g => rolesAndTitles.includes(g.name.toLowerCase().trim()))
-              .map(g => g.id);
-
-            // Anyone who is in any of the member corps should
-            // get the "Member" group automatically.
-            expectedGroups = [
-              ...expectedGroups,
-              ...memberGroups.map(f => f.id),
-            ];
-
-            const groupsToAdd = _.difference(expectedGroups, currentGroups);
-            const groupsToRemove = _.difference(currentGroups, expectedGroups);
-
-            await Promise.all([
-              ...groupsToAdd.map(f => addGroup({ user, allGroups, groupId: f })),
-              ...groupsToRemove.map(f => removeGroup({ user, allGroups, groupId: f, keywordBlacklist })),
-            ]);
-          }
+        if (!isCorpMember && !isAllianceMember) {
+          await Promise.all(memberGroups.map(f => removeGroup({ user, allGroups, groupId: f, keywordBlacklist })));
+          
+          return cb(null, user);
         }
+
+        // Get the characters's corp roles and titles.
+        const [roles, titles, currentGroupsRaw] = await Promise.all([
+          useAutoRoles ? getRoles({ profile, accessToken }) : [],
+          useAutoRoles ? getTitles({ profile, accessToken }) : [],
+          user.$relatedQuery('groups').select('groups.id'),
+        ]);
+
+        const rolesAndTitles = [
+          ...roles,
+          ...titles,
+        ];
+
+        if(useAutoRoles)
+          WIKI.logger.info(`Roles and titles: ${JSON.stringify(rolesAndTitles)}`);
+
+        const currentGroups = currentGroupsRaw.map(g => g.id);
+
+        let expectedGroups = allGroups
+          .filter(g => rolesAndTitles.includes(g.name.toLowerCase().trim()))
+          .map(g => g.id);
+
+        // Anyone who is in any of the member corps should
+        // get the "Member" group automatically.
+        expectedGroups = [
+          ...expectedGroups,
+          ...memberGroups.map(f => f.id),
+        ];
+
+        const groupsToAdd = _.difference(expectedGroups, currentGroups);
+        const groupsToRemove = useAutoRoles ? _.difference(currentGroups, expectedGroups) : [];
+
+        await Promise.all([
+          ...groupsToAdd.map(f => addGroup({ user, allGroups, groupId: f })),
+          ...groupsToRemove.map(f => removeGroup({ user, allGroups, groupId: f, keywordBlacklist })),
+        ]);
 
         cb(null, user);
       } catch (err) {

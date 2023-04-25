@@ -33,13 +33,18 @@ props:
     title: Corporation IDs
     hint: Comma-delimited list of corp IDs for membership (https://evewho.com)
     order: 5
+  useAutoRoles:
+    type: Boolean
+    title: Use Auto Roles
+    hint: Whether a user's wiki roles should be synced with their corp roles and titles
+    order: 6
   keywordBlacklist:
     type: String
     title: Ignored Group Keywords
     hint: Comma-delimited list of full or partial group names to ignore when removing roles
-    order: 6
+    order: 7
   corpMemberGroupNames:
     type: String
-    title: Corporation Member Group Names
-    hint: Comma-delimited list of groups to assign to any member who is part of the Corporation IDs above
-    order: 7
+    title: Corp/Alliance Member Group Names
+    hint: Comma-delimited list of groups to assign to any user who is part of the Corporation IDs or Alliance IDs above
+    order: 8
